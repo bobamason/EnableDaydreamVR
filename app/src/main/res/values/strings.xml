@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Enable VR</string>
+    <string name="title_home">Home</string>
+    <string name="title_dashboard">Dashboard</string>
+    <string name="title_notifications">Notifications</string>
+    <string name="not_available">Required hardware not available:</string>
+    <string name="compass">compass</string>
+    <string name="gyroscope">gyroscope</string>
+    <string name="accelerometer">accelerometer</string>
+    <string name="not_supported">Device not Supported</string>
+    <string name="error">Error</string>
+    <string name="no_root">Your device does not seem to be rooted or permission was not granted by SuperSU.</string>
+    <string name="file_missing">handheld_core_hardware.xml not found</string>
+    <string name="vr_enabled">Daydream VR Enabled</string>
+    <string name="vr_message">Next Steps: \n\t- Make sure VR Services are up to date. \n\t- Download and install the latest Daydream and Daydream Keyboard APKs.</string>
+    <string name="vr_already_enabled">Daydream VR Already Enabled</string>
+</resources>
