@@ -16,9 +16,11 @@ import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -108,7 +110,9 @@ public class MainActivity extends AppCompatActivity {
                     .open((commandCode, exitCode, output) -> {
 
                         if (exitCode != Shell.OnCommandResultListener.SHELL_RUNNING) {
-                            Logger.e("Error opening root shell: exitCode " + exitCode);
+                            final String error = "Error opening root shell: exitCode " + exitCode;
+                            Logger.e(error);
+                            addText("\n" + error + "\n");
                             showFatalError(R.string.no_root);
                         } else {
                             // Shell is up: send our first request 
@@ -123,9 +127,10 @@ public class MainActivity extends AppCompatActivity {
 //      <feature name=”android.software.vr.mode” />
 //      <feature name=”android.hardware.vr.high_performance” />
         final String command = "ls -1 " + SYSTEM_ETC_PERMISSIONS;
+        addText("\n#" + command + "\n");
         rootSession.addCommand(command, 0, (commandCode, exitCode, output) -> {
             if (exitCode < 0) {
-                Logger.e("Error adding command: exitCode " + exitCode);
+                logExitCodeError(exitCode);
             } else {
                 handleFileListResult(output);
             }
@@ -167,11 +172,17 @@ public class MainActivity extends AppCompatActivity {
         if (rootSession == null) return;
 //      <feature name=”android.software.vr.mode” />
 //      <feature name=”android.hardware.vr.high_performance” />
-        final String command = "chmod 777 " + SYSTEM_ETC_PERMISSIONS + HANDHELD_CORE_HARDWARE_XML;
+        String command = "mount -o rw,remount /system";
+        addText("#" + command + "\n");
+        rootSession.addCommand(command);
+        command = "chmod 777 " + SYSTEM_ETC_PERMISSIONS + HANDHELD_CORE_HARDWARE_XML;
+        addText("#" + command + "\n");
         rootSession.addCommand(command, 0, (commandCode, exitCode, output) -> {
             if (exitCode < 0) {
-                Logger.e("Error adding command: exitCode " + exitCode);
+                logExitCodeError(exitCode);
             } else {
+                addLines(output);
+                addText("\nparsing file\n");
                 parseCoreHardwareXml(new File(SYSTEM_ETC_PERMISSIONS, HANDHELD_CORE_HARDWARE_XML));
             }
         });
@@ -184,37 +195,77 @@ public class MainActivity extends AppCompatActivity {
                         .newDocumentBuilder()
                         .parse(file);
                 if (document == null) return;
+//                addText(documentToString(document) + "\n");
                 final NodeList features = document.getElementsByTagName("feature");
                 boolean hasVrHighPerformance = false;
                 boolean hasVrSoftwareMode = false;
 
+                List<String> featureNames = new ArrayList<>();
                 for (int i = 0; i < features.getLength(); i++) {
                     final Node node = features.item(i);
                     if (node.getNodeType() == Node.ELEMENT_NODE) {
                         final Element element = (Element) node;
                         if (element.hasAttribute("name")) {
-                            if (element.getAttribute("name").equalsIgnoreCase(ANDROID_HARDWARE_VR_HIGH_PERFORMANCE))
+                            final String attribute = element.getAttribute("name");
+                            featureNames.add(attribute);
+                            if (attribute.equalsIgnoreCase(ANDROID_HARDWARE_VR_HIGH_PERFORMANCE))
                                 hasVrHighPerformance = true;
-                            if (element.getAttribute("name").equalsIgnoreCase(ANDROID_SOFTWARE_VR_MODE))
+                            if (attribute.equalsIgnoreCase(ANDROID_SOFTWARE_VR_MODE))
                                 hasVrSoftwareMode = true;
                         }
                     }
                 }
+                addText("Available Features:\n");
+                addLines(featureNames);
                 if (hasVrHighPerformance && hasVrSoftwareMode) {
                     showAlreadyHaveVrDialog();
                 } else {
                     fixCoreHardwareFile(document);
-                    final Transformer transformer = TransformerFactory.newInstance().newTransformer();
-                    final DOMSource source = new DOMSource(document);
-                    final Result target = new StreamResult(file);
-                    transformer.transform(source, target);
-                    fixPermissionsAndFinish();
+                    writeDocumentToFile(file, document, (commandCode, exitCode, output) -> {
+                        if (exitCode < 0) {
+                            logExitCodeError(exitCode);
+                        } else {
+                            addLines(output);
+                            fixPermissionsAndFinish();
+                        }
+                    });
                 }
             } catch (SAXException | IOException | ParserConfigurationException | TransformerException e) {
                 Logger.e("failed to parse xml", e);
                 showFatalError(e.getLocalizedMessage());
             }
         });
+    }
+
+    private void logExitCodeError(int exitCode) {
+        final String error = "Error adding command: exitCode " + exitCode;
+        Logger.e(error);
+        addText("\n" + error + "\n");
+    }
+
+    private void writeDocumentToFile(File file, Document document, Shell.OnCommandResultListener onCommandResultListener) throws IOException, TransformerException {
+//        addText("\n****new file****\n");
+//        addText(documentToString(document) + "\n");
+        final Transformer transformer = TransformerFactory.newInstance().newTransformer();
+        final DOMSource source = new DOMSource(document);
+        final File tempFile = File.createTempFile("handheld_core", "xml");
+        final Result target = new StreamResult(tempFile);
+        transformer.transform(source, target);
+        if (rootSession != null) {
+            final String command = "cat " + tempFile.getAbsolutePath() + " > " + file.getAbsolutePath();
+            addText("\n#" + command + "\n");
+            rootSession.addCommand(command, 0, onCommandResultListener);
+        } else
+            showFatalError("error su session ended");
+    }
+
+    private String documentToString(Document document) throws TransformerException {
+        final Transformer transformer = TransformerFactory.newInstance().newTransformer();
+        final DOMSource source = new DOMSource(document);
+        final ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        final Result target = new StreamResult(stream);
+        transformer.transform(source, target);
+        return stream.toString();
     }
 
     @Nullable
@@ -232,42 +283,46 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void fixCoreHardwareFile(Document document) {
+        addText("\nfixing file\n");
         try {
-            final Node root = document.getElementsByTagName("permission").item(0);
-            
+            final Node root = document.getElementsByTagName("permissions").item(0);
+
             final Element featureHW = document.createElement("feature");
             root.appendChild(featureHW);
             final Attr nameHW = document.createAttribute("name");
             nameHW.setValue(ANDROID_HARDWARE_VR_HIGH_PERFORMANCE);
             featureHW.setAttributeNode(nameHW);
-            
+
             final Element featureSW = document.createElement("feature");
             root.appendChild(featureSW);
             final Attr nameSW = document.createAttribute("name");
             nameSW.setValue(ANDROID_SOFTWARE_VR_MODE);
             featureSW.setAttributeNode(nameSW);
-            
-        } catch (Exception e){
+            addText("\nfixing file complete\n");
+        } catch (Exception e) {
             Logger.e("failed to add lines to xml", e);
+            addText("\nfixing file failed\n");
             showFatalError(e.getLocalizedMessage());
         }
     }
 
     private void fixPermissionsAndFinish() {
         if (rootSession == null) return;
-            rootSession.addCommand("chmod 744 " + SYSTEM_ETC_PERMISSIONS + HANDHELD_CORE_HARDWARE_XML, 0, (commandCode, exitCode, output) -> {
-                if (exitCode < 0) {
-                    Logger.e("Error adding command: exitCode " + exitCode);
-                } else {
-                    runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
-                            .setTitle(R.string.vr_enabled)
-                            .setMessage(R.string.vr_message)
-                            .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
-                            .setOnDismissListener(dialog -> finish())
-                            .create()
-                            .show());
-                }
-            });
+        final String command = "chmod 744 " + SYSTEM_ETC_PERMISSIONS + HANDHELD_CORE_HARDWARE_XML;
+        addText("\n#" + command + "\n");
+        rootSession.addCommand(command, 0, (commandCode, exitCode, output) -> {
+            if (exitCode < 0) {
+                logExitCodeError(exitCode);
+            } else {
+                addLines(output);
+                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(R.string.vr_enabled)
+                        .setMessage(R.string.vr_message)
+                        .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
+                        .create()
+                        .show());
+            }
+        });
     }
 
     private void showFatalError(int messageId) {
@@ -275,13 +330,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showFatalError(String message) {
+        Logger.e(message);
+        addText("\n" + message + "\n");
         runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
                 .setTitle(R.string.error)
                 .setMessage(message)
-                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
-                    dialog.dismiss();
-                    finish();
-                })
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
                 .create()
                 .show());
     }
@@ -291,7 +345,6 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(R.string.vr_already_enabled)
                 .setMessage(R.string.vr_message)
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> dialog.dismiss())
-                .setOnDismissListener(dialog -> finish())
                 .create()
                 .show());
     }
@@ -315,11 +368,14 @@ public class MainActivity extends AppCompatActivity {
 
     private void addText(String s) {
         stringBuffer.append(s);
+        scrollToBottom();
     }
 
     private void scrollToBottom() {
-        textView.setText(stringBuffer);
-        scrollView.fullScroll(ScrollView.FOCUS_DOWN);
+        runOnUiThread(() -> {
+            textView.setText(stringBuffer);
+            scrollView.fullScroll(ScrollView.FOCUS_DOWN);
+        });
     }
 
 //    Enables Daydream VR by adding features to the handheld_core_hardware.xml
