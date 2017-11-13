@@ -377,15 +377,4 @@ public class MainActivity extends AppCompatActivity {
             scrollView.fullScroll(ScrollView.FOCUS_DOWN);
         });
     }
-
-//    Enables Daydream VR by adding features to the handheld_core_hardware.xml
-//    android.software.vr.mode
-//    android.hardware.vr.high_performance
-//
-//    DEVICE REQUIREMENTS
-//    ROOT ACCESS
-//    ANDROID 7.0+
-//    ACCELEROMETER, GYROSCOPE, AND COMPASS
-//
-//    doesn't install VR Services or Daydream Home and Keyboard
 }
